@@ -1,0 +1,2 @@
+#!/bin/sh
+clang++ -g -std=c++20 -L/usr/local/lib -lsfml-graphics -lsfml-window -lsfml-system -o main main.cpp && ./main
