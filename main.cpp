@@ -171,7 +171,6 @@ public:
                 if (cards[c].sprite.getGlobalBounds().contains(pos)) {
                     //TODO: check for run
                     if (it == row.end() - 1) {
-                        cards[c].selected = true;
                         return Range(it, row.end(), i >= 4);
                     }
                     return {};
@@ -183,11 +182,7 @@ public:
             for (iterator it = row.end(); it-- != row.begin();) {
                 char c = *it;
                 if (cards[c].sprite.getGlobalBounds().contains(pos)) {
-                    if (it == row.end() - 1) {
-                        cards[c].selected = true;
-                        return Range(it, row.end());
-                    }
-                    return {};
+                    return it == row.end() - 1 ? Range(it, row.end()) : std::optional<Range>{};
                 }
             }
         }
@@ -280,9 +275,10 @@ int main() {
     sf::RenderWindow window(sf::VideoMode({WINDOW_WIDTH, WINDOW_HEIGHT}), "SFML");
     window.setFramerateLimit(FPS);
     std::optional<Range> sel;
+    std::optional<Range> drag;
     sf::Vector2i last_pos;
     while (window.isOpen()) {
-        if (sel) {
+        if (drag) {
             sf::Vector2i pos = sf::Mouse::getPosition(window);
             sf::Vector2i delta = pos - last_pos;
             last_pos = pos;
@@ -295,9 +291,19 @@ int main() {
                 window.close();
             } else if (event->is<sf::Event::MouseButtonPressed>()) {
                 last_pos = sf::Mouse::getPosition(window);
-                sel = game.select(last_pos);
+                std::optional<Range> last_sel = sel;
+                drag = sel = game.select(last_pos);
+                if (!last_sel) {
+                    if (sel) {
+                        cards[*sel->begin].selected = true;
+                    }
+                } else if (sel) {
+                    //TODO:
+                } else {
+                    cards[*last_sel->begin].selected = false;
+                }
             } else if (event->is<sf::Event::MouseButtonReleased>()) {
-                sel = {};
+                drag = {};
             }
         }
 
