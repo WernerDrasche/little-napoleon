@@ -13,6 +13,8 @@
 #define CARD_HEIGHT    323
 #define CARDS_PER_SUIT 13
 
+using iterator = std::vector<char>::iterator;
+
 const unsigned NUM_CARDS = 4 * CARDS_PER_SUIT;
 const float CARD_WS = CARD_WIDTH * CARD_SCALE + 2 * OUTLINE_WIDTH;
 const float CARD_HS = CARD_HEIGHT * CARD_SCALE + 2 * OUTLINE_WIDTH;
@@ -56,6 +58,14 @@ struct Card : public sf::Drawable {
         , selected(false)
     {}
 
+    sf::Vector2f update(sf::Vector2i delta) {
+        sf::Vector2f pos = sprite.getPosition();
+        pos.x += delta.x;
+        pos.y += delta.y;
+        sprite.setPosition(pos);
+        return pos;
+    }
+
     virtual void draw(sf::RenderTarget &target, sf::RenderStates) const override {
         if (selected) {
             sf::FloatRect bounds = sprite.getGlobalBounds();
@@ -69,6 +79,12 @@ struct Card : public sf::Drawable {
     }
 };
 
+struct Range {
+    iterator begin;
+    iterator end;
+    bool left_to_right;
+};
+
 std::array<sf::RenderTexture, NUM_CARDS> card_textures;
 std::vector<Card> cards;
 
@@ -76,16 +92,18 @@ class Game : public sf::Drawable {
     std::array<std::vector<char>, 4> piles;
     std::array<std::vector<char>, 8> rows;
     std::array<std::vector<char>, 2> extra;
-    char cellar;
+    std::vector<char> cellar;
 
+public:
     static void setPilePositions(
-            const std::vector<char> &vec,
+            iterator begin,
+            iterator end,
             sf::Vector2f pos,
             bool left_to_right,
             bool stacked = true)
     {
-        for (char c : vec) {
-            cards[c].sprite.setPosition(pos);
+        for (iterator it = begin; it != end; ++it) {
+            cards[*it].sprite.setPosition(pos);
             float dx = stacked ? CARD_WR : CARD_WS + CARD_MARGIN;
             pos.x += left_to_right ? dx : -dx;
         }
@@ -105,9 +123,8 @@ class Game : public sf::Drawable {
         }
     }
 
-public:
     Game() {
-        cellar = -1;
+        cellar.reserve(1);
         std::array<char, NUM_CARDS> used;
         for (unsigned i = 0; i < NUM_CARDS; ++i) {
             used[i] = i;
@@ -129,52 +146,52 @@ public:
         pos.x -= CARD_MARGIN + CARD_WS;
         for (unsigned i = 0; i < 4; ++i) {
             initPile(rows[i], used, 5);
-            setPilePositions(rows[i], pos, false);
+            setPilePositions(rows[i].begin(), rows[i].end(), pos, false);
             pos.y += CARD_HS + ROW_MARGIN;
         }
         initPile(extra[0], used, 4);
-        setPilePositions(extra[0], pos, false, false);
+        setPilePositions(extra[0].begin(), extra[0].end(), pos, false, false);
         pos.y = START_Y;
         pos.x += (CARD_WS + CARD_MARGIN) * 2;
         for (unsigned i = 4; i < 8; ++i) {
             initPile(rows[i], used, 5);
-            setPilePositions(rows[i], pos, true);
+            setPilePositions(rows[i].begin(), rows[i].end(), pos, true);
             pos.y += CARD_HS + ROW_MARGIN;
         }
         initPile(extra[1], used, 4);
-        setPilePositions(extra[1], pos, true, false);
+        setPilePositions(extra[1].begin(), extra[1].end(), pos, true, false);
     }
 
-    char select(sf::Vector2i mouse_pos) {
+    std::optional<Range> select(sf::Vector2i mouse_pos) {
         sf::Vector2f pos = {(float)mouse_pos.x, (float)mouse_pos.y};
         for (unsigned i = 8; i-- > 0;) {
             std::vector<char> &row = rows[i];
-            for (unsigned k = row.size(); k-- > 0;) {
-                char c = row[k];
+            for (iterator it = row.end(); it-- != row.begin();) {
+                char c = *it;
                 if (cards[c].sprite.getGlobalBounds().contains(pos)) {
                     //TODO: check for run
-                    if (k == row.size() - 1) {
+                    if (it == row.end() - 1) {
                         cards[c].selected = true;
-                        return c;
+                        return Range(it, row.end(), i >= 4);
                     }
-                    return -1;
+                    return {};
                 }
             }
         }
         for (unsigned i = 2; i-- > 0;) {
-            std::vector<char> &row = rows[i];
-            for (unsigned k = row.size(); k-- > 0;) {
-                char c = row[k];
+            std::vector<char> &row = extra[i];
+            for (iterator it = row.end(); it-- != row.begin();) {
+                char c = *it;
                 if (cards[c].sprite.getGlobalBounds().contains(pos)) {
-                    if (k == row.size() - 1) {
+                    if (it == row.end() - 1) {
                         cards[c].selected = true;
-                        return c;
+                        return Range(it, row.end());
                     }
-                    return -1;
+                    return {};
                 }
             }
         }
-        return -1;
+        return {};
     }
 
     virtual void draw(sf::RenderTarget &target, sf::RenderStates) const override {
@@ -262,18 +279,35 @@ int main() {
 
     sf::RenderWindow window(sf::VideoMode({WINDOW_WIDTH, WINDOW_HEIGHT}), "SFML");
     window.setFramerateLimit(FPS);
+    std::optional<Range> sel;
+    sf::Vector2i last_pos;
     while (window.isOpen()) {
+        if (sel) {
+            sf::Vector2i pos = sf::Mouse::getPosition(window);
+            sf::Vector2i delta = pos - last_pos;
+            last_pos = pos;
+            sf::Vector2f new_pos = cards[*sel->begin].update(delta);
+            Game::setPilePositions(sel->begin, sel->end, new_pos, sel->left_to_right);
+        }
+
         while (const std::optional event = window.pollEvent()) {
             if (event->is<sf::Event::Closed>()) {
                 window.close();
             } else if (event->is<sf::Event::MouseButtonPressed>()) {
-                sf::Vector2i pos = sf::Mouse::getPosition(window);
-                char c = game.select(pos);
+                last_pos = sf::Mouse::getPosition(window);
+                sel = game.select(last_pos);
+            } else if (event->is<sf::Event::MouseButtonReleased>()) {
+                sel = {};
             }
         }
 
         window.clear(COLOR_BG);
         window.draw(game);
+        if (sel) {
+            for (iterator it = sel->begin; it != sel->end; ++it) {
+                window.draw(cards[*it]);
+            }
+        }
         window.display();
     }
 }
