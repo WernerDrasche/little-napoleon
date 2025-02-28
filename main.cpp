@@ -2,18 +2,23 @@
 #include <random>
 
 #define WINDOW_WIDTH  1200
-#define WINDOW_HEIGHT 750
+#define WINDOW_HEIGHT 800
 #define FPS           60
 #define OUTLINE_WIDTH 2
 #define CARD_SCALE    0.4
+#define CARD_MARGIN   10
+#define ROW_MARGIN    20
 
 #define CARD_WIDTH     222
 #define CARD_HEIGHT    323
 #define CARDS_PER_SUIT 13
 
 const unsigned NUM_CARDS = 4 * CARDS_PER_SUIT;
-const float CARD_WS = CARD_WIDTH * CARD_SCALE;
-const float CARD_HS = CARD_HEIGHT * CARD_SCALE;
+const float CARD_WS = CARD_WIDTH * CARD_SCALE + 2 * OUTLINE_WIDTH;
+const float CARD_HS = CARD_HEIGHT * CARD_SCALE + 2 * OUTLINE_WIDTH;
+const float CARD_WR = CARD_WS * 0.25;
+const float START_Y = (WINDOW_HEIGHT - CARD_HS - 4 * (CARD_HS + ROW_MARGIN)) / 2;
+
 const sf::Color COLOR_BG = {40, 150, 80};
 const sf::Color COLOR_CARD = sf::Color::White;
 const sf::Color COLOR_OUTLINE = sf::Color::Black;
@@ -41,14 +46,20 @@ char randomCard() {
     return distr(gen);
 }
 
-class Card : public sf::Drawable {
+struct Card : public sf::Drawable {
     sf::Sprite sprite;
+    bool selected;
 
-public:
-    Card(const sf::Texture &texture) : sprite(texture) {}
+    Card(const sf::Texture &texture) 
+        : sprite(texture)
+        , selected(false)
+    {}
 
     virtual void draw(sf::RenderTarget &target, sf::RenderStates) const override {
         target.draw(sprite);
+        if (selected) {
+            //TODO:
+        }
     }
 };
 
@@ -61,6 +72,19 @@ class Game : public sf::Drawable {
     std::array<std::vector<char>, 2> extra;
     char cellar;
 
+    static void setPilePositions(
+            const std::vector<char> &vec,
+            sf::Vector2f pos,
+            bool left_to_right,
+            bool stacked = true)
+    {
+        for (char c : vec) {
+            cards[c].sprite.setPosition(pos);
+            float dx = stacked ? CARD_WR : CARD_WS + CARD_MARGIN;
+            pos.x += left_to_right ? dx : -dx;
+        }
+    }
+
     static void initPile(
             std::vector<char> &vec,
             std::array<char, NUM_CARDS> &used,
@@ -69,7 +93,7 @@ class Game : public sf::Drawable {
         vec.reserve(n);
         for (unsigned i = 0; i < n; ++i) {
             char c = randomCard();
-            for (; used[c] != -1; c = (c + 1) % CARDS_PER_SUIT);
+            for (; used[c] == -1; c = (c + 1) % NUM_CARDS);
             used[c] = -1;
             vec.push_back(c);
         }
@@ -82,23 +106,54 @@ public:
         for (unsigned i = 0; i < NUM_CARDS; ++i) {
             used[i] = i;
         }
+        sf::Vector2f pos = {
+            (WINDOW_WIDTH - CARD_WS) / 2,
+            START_Y,
+        };
         char c = randomCard() % CARDS_PER_SUIT;
         for (unsigned i = 0; i < 4; ++i) {
+            cards[c].sprite.setPosition(pos);
             used[c] = -1;
             piles[i].reserve(CARDS_PER_SUIT);
             piles[i].push_back(c);
             c += CARDS_PER_SUIT;
+            pos.y += CARD_HS + ROW_MARGIN;
         }
-        for (auto &row : rows) {
-            initPile(row, used, 5);
+        pos.y = START_Y;
+        pos.x -= CARD_MARGIN + CARD_WS;
+        for (unsigned i = 0; i < 4; ++i) {
+            initPile(rows[i], used, 5);
+            setPilePositions(rows[i], pos, false);
+            pos.y += CARD_HS + ROW_MARGIN;
         }
-        for (auto &row : extra) {
-            initPile(row, used, 4);
+        initPile(extra[0], used, 4);
+        setPilePositions(extra[0], pos, false, false);
+        pos.y = START_Y;
+        pos.x += (CARD_WS + CARD_MARGIN) * 2;
+        for (unsigned i = 4; i < 8; ++i) {
+            initPile(rows[i], used, 5);
+            setPilePositions(rows[i], pos, true);
+            pos.y += CARD_HS + ROW_MARGIN;
         }
+        initPile(extra[1], used, 4);
+        setPilePositions(extra[1], pos, true, false);
     }
 
     virtual void draw(sf::RenderTarget &target, sf::RenderStates) const override {
-        target.draw(cards[2], sf::Transform());
+        for (auto &row : rows) {
+            for (char c : row) {
+                target.draw(cards[c]);
+            }
+        }
+        for (auto &row : extra) {
+            for (char c : row) {
+                target.draw(cards[c]);
+            }
+        }
+        target.draw(cards[piles[0].back()]);
+        target.draw(cards[piles[1].back()]);
+        target.draw(cards[piles[2].back()]);
+        target.draw(cards[piles[3].back()]);
     }
 };
 
@@ -145,15 +200,16 @@ void loadCards() {
                 break;
         }
         std::sprintf(strbuf, "assets/%s_of_%s.png", rank_str, suit_str);
-        sf::RenderTexture texture({(unsigned)CARD_WS, (unsigned)CARD_HS});
+        sf::RenderTexture texture({(unsigned)CARD_WS + 2 * OUTLINE_WIDTH, (unsigned)CARD_HS + 2 * OUTLINE_WIDTH});
         texture.clear(COLOR_CARD);
-        sf::RectangleShape rect({CARD_WS - 2 * OUTLINE_WIDTH, CARD_HS - 2 * OUTLINE_WIDTH});
+        sf::RectangleShape rect({CARD_WS, CARD_HS});
         rect.setPosition({OUTLINE_WIDTH, OUTLINE_WIDTH});
         rect.setOutlineColor(COLOR_OUTLINE);
         rect.setOutlineThickness(OUTLINE_WIDTH);
         texture.draw(rect);
         sf::Texture tmp(strbuf);
         sf::Sprite sprite(tmp);
+        sprite.setPosition({OUTLINE_WIDTH, OUTLINE_WIDTH});
         sprite.scale({CARD_SCALE, CARD_SCALE});
         texture.draw(sprite);
         texture.display();
