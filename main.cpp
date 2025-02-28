@@ -22,6 +22,7 @@ const float START_Y = (WINDOW_HEIGHT - CARD_HS - 4 * (CARD_HS + ROW_MARGIN)) / 2
 const sf::Color COLOR_BG = {40, 150, 80};
 const sf::Color COLOR_CARD = sf::Color::White;
 const sf::Color COLOR_OUTLINE = sf::Color::Black;
+const sf::Color COLOR_SELECT = sf::Color::Blue;
 
 char strbuf[1024];
 
@@ -56,10 +57,15 @@ struct Card : public sf::Drawable {
     {}
 
     virtual void draw(sf::RenderTarget &target, sf::RenderStates) const override {
-        target.draw(sprite);
         if (selected) {
-            //TODO:
+            sf::FloatRect bounds = sprite.getGlobalBounds();
+            sf::RectangleShape rect(bounds.size);
+            rect.setPosition(bounds.position);
+            rect.setOutlineColor(COLOR_SELECT);
+            rect.setOutlineThickness(OUTLINE_WIDTH);
+            target.draw(rect);
         }
+        target.draw(sprite);
     }
 };
 
@@ -137,6 +143,38 @@ public:
         }
         initPile(extra[1], used, 4);
         setPilePositions(extra[1], pos, true, false);
+    }
+
+    char select(sf::Vector2i mouse_pos) {
+        sf::Vector2f pos = {(float)mouse_pos.x, (float)mouse_pos.y};
+        for (unsigned i = 8; i-- > 0;) {
+            std::vector<char> &row = rows[i];
+            for (unsigned k = row.size(); k-- > 0;) {
+                char c = row[k];
+                if (cards[c].sprite.getGlobalBounds().contains(pos)) {
+                    //TODO: check for run
+                    if (k == row.size() - 1) {
+                        cards[c].selected = true;
+                        return c;
+                    }
+                    return -1;
+                }
+            }
+        }
+        for (unsigned i = 2; i-- > 0;) {
+            std::vector<char> &row = rows[i];
+            for (unsigned k = row.size(); k-- > 0;) {
+                char c = row[k];
+                if (cards[c].sprite.getGlobalBounds().contains(pos)) {
+                    if (k == row.size() - 1) {
+                        cards[c].selected = true;
+                        return c;
+                    }
+                    return -1;
+                }
+            }
+        }
+        return -1;
     }
 
     virtual void draw(sf::RenderTarget &target, sf::RenderStates) const override {
@@ -228,6 +266,9 @@ int main() {
         while (const std::optional event = window.pollEvent()) {
             if (event->is<sf::Event::Closed>()) {
                 window.close();
+            } else if (event->is<sf::Event::MouseButtonPressed>()) {
+                sf::Vector2i pos = sf::Mouse::getPosition(window);
+                char c = game.select(pos);
             }
         }
 
