@@ -14,6 +14,8 @@
 #define CARDS_PER_SUIT 13
 #define NUM_VACANT 9
 
+//TODO: maybe segfault because pop causes realloc??
+
 using iterator = std::vector<char>::iterator;
 
 const char NUM_CARDS = 4 * CARDS_PER_SUIT;
@@ -66,6 +68,10 @@ struct Card : public sf::Drawable {
         return id >= NUM_CARDS;
     }
 
+    constexpr bool fits(const Card &other) {
+        return true;
+    }
+
     sf::Vector2f update(sf::Vector2i delta) {
         sf::Vector2f pos = sprite.getPosition();
         pos.x += delta.x;
@@ -90,13 +96,29 @@ struct Card : public sf::Drawable {
     }
 };
 
+struct Row {
+    char idx;
+};
+
+struct Extra {
+    char idx;
+};
+
+struct Cellar {};
+
+using Place = std::variant<Row, Extra, Cellar>;
+
 struct Range {
     iterator begin;
     iterator end;
-    char place;
+    Place place;
 
     constexpr bool isLeftToRight() const {
-        return place >= 4;
+        return std::holds_alternative<Row>(place) && std::get<Row>(place).idx >= 4;
+    }
+
+    constexpr unsigned size() const {
+        return end - begin;
     }
 };
 
@@ -198,7 +220,7 @@ public:
                 if (card.sprite.getGlobalBounds().contains(pos)) {
                     //TODO: check for run
                     if (it == row.end() - 1) {
-                        return Range(it, row.end(), i);
+                        return Range(it, row.end(), Row(i));
                     }
                     return {};
                 }
@@ -210,7 +232,7 @@ public:
                 Card &card = cards[*it];
                 if (card.selected) continue;
                 if (card.sprite.getGlobalBounds().contains(pos)) {
-                    return it == row.end() - 1 ? Range(it, row.end(), i + 8) : std::optional<Range>{};
+                    return it == row.end() - 1 ? Range(it, row.end(), Extra(i)) : std::optional<Range>{};
                 }
             }
         }
@@ -218,10 +240,48 @@ public:
             Card &card = cards[*it];
             if (card.sprite.getGlobalBounds().contains(pos)) {
                 assert(cellar.size() <= 2);
-                return Range(it, cellar.end(), 10);
+                return Range(it, cellar.end(), Cellar());
             }
         }
         return {};
+    }
+
+    constexpr std::vector<char> &getPlace(Place place) {
+        if (std::holds_alternative<Row>(place)) {
+            return rows[std::get<Row>(place).idx];
+        } else if (std::holds_alternative<Extra>(place)) {
+            return extra[std::get<Extra>(place).idx];
+        } else {
+            return cellar;
+        }
+    }
+
+    void tryMove(const Range &from, const Range &to) {
+        Card &last = cards[*(to.end - 1)];
+        Card &first = cards[*from.begin];
+        std::vector<char> &row_from = getPlace(from.place);
+        std::vector<char> &row_to = getPlace(to.place);
+        if ((std::holds_alternative<Cellar>(to.place) 
+                && last.isVacant()
+                && from.size() == 1)
+            || (std::holds_alternative<Row>(to.place)
+                && last.fits(first)))
+        {
+            for (iterator it = from.begin; it != from.end; ++it) {
+                row_from.pop_back();
+                row_to.push_back(*it);
+            }
+        }
+        Game::setPilePositions(
+                row_from.begin(), 
+                row_from.end(),
+                cards[row_from.front()].sprite.getPosition(),
+                from.isLeftToRight());
+        Game::setPilePositions(
+                row_to.begin(), 
+                row_to.end(),
+                cards[row_to.front()].sprite.getPosition(),
+                to.isLeftToRight());
     }
 
     virtual void draw(sf::RenderTarget &target, sf::RenderStates) const override {
@@ -338,13 +398,14 @@ int main() {
                     if (!cards[*sel->begin].isVacant()) {
                         cards[*sel->begin].selected = true;
                     }
-                }
-                if (sel && last_sel) {
-                    //TODO:
+                    if (last_sel) {
+                        game.tryMove(*last_sel, *sel);
+                    }
                 }
             } else if (event->is<sf::Event::MouseButtonReleased>()) {
                 drag = {};
-            } else if (event->is<sf::Event::MouseMoved>()) {
+            } 
+            if (event->is<sf::Event::MouseMoved>()) {
                 sf::Vector2i pos = sf::Mouse::getPosition(window);
                 if (drag) {
                     sf::Vector2i delta = pos - last_pos;
