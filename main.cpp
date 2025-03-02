@@ -14,7 +14,7 @@
 #define CARDS_PER_SUIT 13
 #define NUM_VACANT 9
 
-//TODO: maybe segfault because pop causes realloc??
+//TODO: Lots of bugs
 
 using iterator = std::vector<char>::iterator;
 
@@ -70,6 +70,8 @@ struct Card : public sf::Drawable {
 
     constexpr bool fits(const Card &other) {
         return true;
+        //return id / CARDS_PER_SUIT == other.id / CARDS_PER_SUIT
+        //    && std::abs((id % CARDS_PER_SUIT) - (other.id % CARDS_PER_SUIT)) == 1;
     }
 
     sf::Vector2f update(sf::Vector2i delta) {
@@ -106,7 +108,35 @@ struct Extra {
 
 struct Cellar {};
 
-using Place = std::variant<Row, Extra, Cellar>;
+struct Pile {
+    char idx;
+};
+
+using Place = std::variant<Row, Extra, Cellar, Pile>;
+
+bool same(Place a, Place b) {
+    size_t i = a.index();
+    if (b.index() != i) {
+        return false;
+    }
+    switch (i) {
+    case 0:
+        return std::get<Row>(a).idx == std::get<Row>(b).idx;
+        break;
+    case 1:
+        return std::get<Extra>(a).idx == std::get<Extra>(b).idx;
+        break;
+    case 2:
+        return true;
+        break;
+    case 3:
+        return std::get<Pile>(a).idx == std::get<Pile>(b).idx;
+        break;
+    default:
+        assert(false);
+        break;
+    }
+}
 
 struct Range {
     iterator begin;
@@ -114,7 +144,8 @@ struct Range {
     Place place;
 
     constexpr bool isLeftToRight() const {
-        return std::holds_alternative<Row>(place) && std::get<Row>(place).idx >= 4;
+        return (std::holds_alternative<Row>(place) && std::get<Row>(place).idx >= 4)
+            || (std::holds_alternative<Extra>(place) && std::get<Extra>(place).idx == 1);
     }
 
     constexpr unsigned size() const {
@@ -132,19 +163,20 @@ class Game : public sf::Drawable {
     std::vector<char> cellar;
 
 public:
-    static void setPilePositions(
-            iterator begin,
-            iterator end,
-            sf::Vector2f pos,
-            bool left_to_right,
-            bool stacked = true)
+    static void setPilePositions(Range range, sf::Vector2f pos)
     {
-        for (iterator it = begin; it != end; ++it) {
-            Card &card = cards[*it];
-            card.sprite.setPosition(pos);
-            if (card.isVacant()) continue;
-            float dx = stacked ? CARD_WR : CARD_WS + CARD_MARGIN;
-            pos.x += left_to_right ? dx : -dx;
+        bool stacked = std::holds_alternative<Row>(range.place);
+        bool left_to_right = range.isLeftToRight();
+        if (std::holds_alternative<Pile>(range.place)) {
+            cards[*(range.end - 1)].sprite.setPosition(pos);
+        } else {
+            for (iterator it = range.begin; it != range.end; ++it) {
+                Card &card = cards[*it];
+                card.sprite.setPosition(pos);
+                if (card.isVacant()) continue;
+                float dx = stacked ? CARD_WR : CARD_WS + CARD_MARGIN;
+                pos.x += left_to_right ? dx : -dx;
+            }
         }
     }
 
@@ -190,20 +222,20 @@ public:
         pos.x -= CARD_MARGIN + CARD_WS;
         for (unsigned i = 0; i < 4; ++i) {
             initPile(rows[i], used, 5, &next_vacant);
-            setPilePositions(rows[i].begin(), rows[i].end(), pos, false);
+            setPilePositions({rows[i].begin(), rows[i].end(), Row(i)}, pos);
             pos.y += CARD_HS + ROW_MARGIN;
         }
         initPile(extra[0], used, 4, nullptr);
-        setPilePositions(extra[0].begin(), extra[0].end(), pos, false, false);
+        setPilePositions({extra[0].begin(), extra[0].end(), Extra(0)}, pos);
         pos.y = START_Y;
         pos.x += (CARD_WS + CARD_MARGIN) * 2;
         for (unsigned i = 4; i < 8; ++i) {
             initPile(rows[i], used, 5, &next_vacant);
-            setPilePositions(rows[i].begin(), rows[i].end(), pos, true);
+            setPilePositions({rows[i].begin(), rows[i].end(), Row(i)}, pos);
             pos.y += CARD_HS + ROW_MARGIN;
         }
         initPile(extra[1], used, 4, nullptr);
-        setPilePositions(extra[1].begin(), extra[1].end(), pos, true, false);
+        setPilePositions({extra[1].begin(), extra[1].end(), Extra(1)}, pos);
         pos.x -= CARD_MARGIN + CARD_WS;
         cards[next_vacant].sprite.setPosition(pos);
         cellar.reserve(2);
@@ -243,6 +275,12 @@ public:
                 return Range(it, cellar.end(), Cellar());
             }
         }
+        for (unsigned i = 0; i < 4; ++i) {
+            Card &card = cards[piles[i].back()];
+            if (card.sprite.getGlobalBounds().contains(pos)) {
+                return Range(piles[i].end() - 1, piles[i].end(), Pile(i));
+            }
+        }
         return {};
     }
 
@@ -251,37 +289,46 @@ public:
             return rows[std::get<Row>(place).idx];
         } else if (std::holds_alternative<Extra>(place)) {
             return extra[std::get<Extra>(place).idx];
+        } else if (std::holds_alternative<Pile>(place)) {
+            return piles[std::get<Pile>(place).idx];
         } else {
             return cellar;
         }
     }
 
-    void tryMove(const Range &from, const Range &to) {
+    bool tryMove(const Range &from, const Range &to) {
+        bool result = false;
         Card &last = cards[*(to.end - 1)];
         Card &first = cards[*from.begin];
         std::vector<char> &row_from = getPlace(from.place);
         std::vector<char> &row_to = getPlace(to.place);
+        unsigned size_from = from.size();
         if ((std::holds_alternative<Cellar>(to.place) 
                 && last.isVacant()
-                && from.size() == 1)
-            || (std::holds_alternative<Row>(to.place)
+                && size_from == 1)
+            || ((std::holds_alternative<Row>(to.place) || std::holds_alternative<Pile>(to.place))
                 && last.fits(first)))
         {
+            result = true;
+            first.selected = first.hovered = false;
+            last.selected = last.hovered = false;
             for (iterator it = from.begin; it != from.end; ++it) {
-                row_from.pop_back();
                 row_to.push_back(*it);
             }
+            for (unsigned i = 0; i < size_from; ++i) {
+                row_from.pop_back();
+            }
         }
-        Game::setPilePositions(
-                row_from.begin(), 
-                row_from.end(),
-                cards[row_from.front()].sprite.getPosition(),
-                from.isLeftToRight());
-        Game::setPilePositions(
-                row_to.begin(), 
-                row_to.end(),
-                cards[row_to.front()].sprite.getPosition(),
-                to.isLeftToRight());
+        if (result) {
+            Game::setPilePositions(
+                    {row_to.begin(), row_to.end(), to.place},
+                    cards[*row_to.begin()].sprite.getPosition());
+        } else {
+            Game::setPilePositions(
+                    {row_from.begin(), row_from.end(), from.place},
+                    cards[*row_from.begin()].sprite.getPosition());
+        }
+        return result;
     }
 
     virtual void draw(sf::RenderTarget &target, sf::RenderStates) const override {
@@ -387,31 +434,15 @@ int main() {
         while (const std::optional event = window.pollEvent()) {
             if (event->is<sf::Event::Closed>()) {
                 window.close();
-            } else if (event->is<sf::Event::MouseButtonPressed>()) {
-                last_pos = sf::Mouse::getPosition(window);
-                std::optional<Range> last_sel = sel;
-                drag = sel = game.select(last_pos);
-                if (last_sel) {
-                    cards[*last_sel->begin].selected = false;
-                }
-                if (sel) {
-                    if (!cards[*sel->begin].isVacant()) {
-                        cards[*sel->begin].selected = true;
-                    }
-                    if (last_sel) {
-                        game.tryMove(*last_sel, *sel);
-                    }
-                }
-            } else if (event->is<sf::Event::MouseButtonReleased>()) {
-                drag = {};
-            } 
+                break;
+            }
             if (event->is<sf::Event::MouseMoved>()) {
                 sf::Vector2i pos = sf::Mouse::getPosition(window);
                 if (drag) {
                     sf::Vector2i delta = pos - last_pos;
                     last_pos = pos;
                     sf::Vector2f new_pos = cards[*sel->begin].update(delta);
-                    Game::setPilePositions(sel->begin, sel->end, new_pos, sel->isLeftToRight());
+                    Game::setPilePositions(*drag, new_pos);
                 }
                 std::optional<Range> last_hover = hover;
                 hover = game.select(pos);
@@ -420,6 +451,36 @@ int main() {
                 }
                 if (hover) {
                     cards[*(hover->end - 1)].hovered = true;
+                }
+            } else if (event->is<sf::Event::MouseButtonPressed>()
+                    || event->is<sf::Event::MouseButtonReleased>()) {
+                std::optional<Range> last_sel = sel;
+                if (sel) {
+                    cards[*sel->begin].selected = false;
+                }
+                if (hover) {
+                    Card &card = cards[*hover->begin];
+                    if (!card.isVacant()
+                            && !std::holds_alternative<Pile>(hover->place)
+                            && event->is<sf::Event::MouseButtonPressed>()) 
+                    {
+                        card.selected = true;
+                        drag = sel = hover;
+                        last_pos = sf::Mouse::getPosition(window);
+                    }
+                    if (last_sel && !same(last_sel->place, hover->place)) {
+                        drag = {};
+                        if (game.tryMove(*last_sel, *hover)) {
+                            hover = sel = {};
+                        }
+                    }
+                } 
+                if (drag && event->is<sf::Event::MouseButtonReleased>()) {
+                    std::vector<char> &row = game.getPlace(drag->place);
+                    Game::setPilePositions(
+                            {row.begin(), row.end(), drag->place},
+                            cards[*row.begin()].sprite.getPosition());
+                    drag = {};
                 }
             }
         }
