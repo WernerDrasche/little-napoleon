@@ -67,9 +67,11 @@ struct Card : public sf::Drawable {
     }
 
     constexpr bool fits(const Card &other) {
-        return true;
-        //return id / CARDS_PER_SUIT == other.id / CARDS_PER_SUIT
-        //    && std::abs((id % CARDS_PER_SUIT) - (other.id % CARDS_PER_SUIT)) == 1;
+        //return true;
+        return id / CARDS_PER_SUIT == other.id / CARDS_PER_SUIT
+            && ((id + 1) % CARDS_PER_SUIT == other.id % CARDS_PER_SUIT
+                    || (other.id + 1) % CARDS_PER_SUIT == id % CARDS_PER_SUIT);
+
     }
 
     sf::Vector2f update(sf::Vector2i delta) {
@@ -255,6 +257,13 @@ public:
         return false;
     }
 
+    bool canSelectCellar() const {
+        for (const auto &row : extra) {
+            if (row.size() == 0) return true;
+        }
+        return false;
+    }
+
     std::optional<Range> select(sf::Vector2i mouse_pos) {
         sf::Vector2f pos = {(float)mouse_pos.x, (float)mouse_pos.y};
         for (unsigned i = 8; i-- > 0;) {
@@ -277,7 +286,7 @@ public:
                 Card &card = cards[*it];
                 if (card.selected) continue;
                 if (card.sprite.getGlobalBounds().contains(pos)) {
-                    return it == row.end() - 1 ? Range(it, row.end(), Extra(i)) : std::optional<Range>{};
+                    return it == row.end() - 1 ? Range(it, row.end(), Extra(i)) : std::optional<Range>();
                 }
             }
         }
@@ -317,6 +326,7 @@ public:
         std::vector<char> &row_from = getPlace(from.place);
         std::vector<char> &row_to = getPlace(to.place);
         unsigned size_from = from.size();
+        first.selected = first.hovered = false;
         if ((std::holds_alternative<Cellar>(to.place) 
                 && last.isVacant()
                 && size_from == 1)
@@ -324,7 +334,6 @@ public:
                 && last.fits(first)))
         {
             result = true;
-            first.selected = first.hovered = false;
             last.selected = last.hovered = false;
             for (iterator it = from.begin; it != from.end; ++it) {
                 row_to.push_back(*it);
@@ -481,18 +490,18 @@ int main() {
                 std::optional<Range> last_hover = hover;
                 if (hover) {
                     Card &card = cards[*hover->begin];
-                    if (!card.isVacant()
+                    if (mouse_pressed
                             && !std::holds_alternative<Pile>(hover->place)
-                            && mouse_pressed) 
+                            && (!std::holds_alternative<Cellar>(hover->place) || game.canSelectCellar())
+                            && !card.isVacant()) 
                     {
                         card.selected = true;
                         drag = sel = hover;
                         hover = {};
                     }
                     if (last_sel && !same(last_sel->place, last_hover->place)) {
-                        drag = {};
                         if (game.tryMove(*last_sel, *last_hover)) {
-                            hover = sel = {};
+                            drag = hover = sel = {};
                         }
                     }
                 } 
