@@ -45,8 +45,8 @@ enum FaceCard {
 
 char randomCard() {
     static std::random_device rd;
-    static std::mt19937 gen(rd());
-    //static std::mt19937 gen(0);
+    //static std::mt19937 gen(rd());
+    static std::mt19937 gen(0);
     static std::uniform_int_distribution<> distr(0, NUM_CARDS - 1);
     return distr(gen);
 }
@@ -505,8 +505,20 @@ int main() {
                     was_dragged = true;
                     sf::Vector2i delta = pos - last_pos;
                     last_pos = pos;
-                    sf::Vector2f new_pos = cards[*sel->begin].update(delta);
+                    sf::Vector2f new_pos = cards[*drag->begin].update(delta);
                     Game::setPilePositions(*drag, new_pos);
+                    int inc_x;
+                    if (drag->size() == 1) {
+                        inc_x = CARD_WS / 2;
+                    } else if (drag->isLeftToRight()) {
+                        inc_x = CARD_WS / 8;
+                    } else {
+                        inc_x = CARD_WS * 7 / 8;
+                    }
+                    pos = {
+                        (int)new_pos.x + inc_x,
+                        (int)new_pos.y + (int)(CARD_HS / 2),
+                    };
                 }
                 std::optional<Range> last_hover = hover;
                 hover = game.select(pos);
@@ -537,6 +549,7 @@ int main() {
                         card.selected = true;
                         card.hovered = false;
                         drag = sel = hover;
+                        cards[hover->end[-1]].hovered = false;
                         hover = {};
                     }
                     if (last_sel && !same(last_sel->place, last_hover->place)) {
