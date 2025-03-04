@@ -14,8 +14,6 @@
 #define CARDS_PER_SUIT 13
 #define NUM_VACANT 9
 
-//TODO: Lots of bugs
-
 using iterator = std::vector<char>::iterator;
 
 const char NUM_CARDS = 4 * CARDS_PER_SUIT;
@@ -138,10 +136,21 @@ bool same(Place a, Place b) {
     }
 }
 
+std::array<sf::RenderTexture, NUM_CARDS + 1> card_textures;
+std::vector<Card> cards;
+
 struct Range {
     iterator begin;
     iterator end;
     Place place;
+
+    constexpr bool isRun() const {
+        if (size() <= 1) return true;
+        for (iterator it = begin; it != end - 1; ++it) {
+            if (!cards[*it].fits(cards[it[1]])) return false;
+        }
+        return true;
+    }
 
     constexpr bool isLeftToRight() const {
         return (std::holds_alternative<Row>(place) && std::get<Row>(place).idx >= 4)
@@ -152,9 +161,6 @@ struct Range {
         return end - begin;
     }
 };
-
-std::array<sf::RenderTexture, NUM_CARDS + 1> card_textures;
-std::vector<Card> cards;
 
 class Game : public sf::Drawable {
     std::array<std::vector<char>, 4> piles;
@@ -242,6 +248,13 @@ public:
         cellar.push_back(next_vacant);
     }
 
+    bool hasVacantRow() const {
+        for (const auto &row : rows) {
+            if (row.size() == 1) return true;
+        }
+        return false;
+    }
+
     std::optional<Range> select(sf::Vector2i mouse_pos) {
         sf::Vector2f pos = {(float)mouse_pos.x, (float)mouse_pos.y};
         for (unsigned i = 8; i-- > 0;) {
@@ -250,9 +263,9 @@ public:
                 Card &card = cards[*it];
                 if (card.selected) continue;
                 if (card.sprite.getGlobalBounds().contains(pos)) {
-                    //TODO: check for run
-                    if (it == row.end() - 1) {
-                        return Range(it, row.end(), Row(i));
+                    Range range(it, row.end(), Row(i));
+                    if (range.size() == 1 || (hasVacantRow() && range.isRun())) {
+                        return range;
                     }
                     return {};
                 }
@@ -270,6 +283,7 @@ public:
         }
         for (iterator it = cellar.end(); it-- != cellar.begin();) {
             Card &card = cards[*it];
+            if (card.selected) continue;
             if (card.sprite.getGlobalBounds().contains(pos)) {
                 assert(cellar.size() <= 2);
                 return Range(it, cellar.end(), Cellar());
@@ -432,6 +446,8 @@ int main() {
     sf::Vector2i last_pos;
     while (window.isOpen()) {
         while (const std::optional event = window.pollEvent()) {
+            bool mouse_pressed = event->is<sf::Event::MouseButtonPressed>();
+            bool mouse_released = event->is<sf::Event::MouseButtonReleased>();
             if (event->is<sf::Event::Closed>()) {
                 window.close();
                 break;
@@ -447,35 +463,40 @@ int main() {
                 std::optional<Range> last_hover = hover;
                 hover = game.select(pos);
                 if (last_hover) {
-                    cards[*(last_hover->end - 1)].hovered = false;
+                    cards[*last_hover->begin].hovered = false;
+                    cards[last_hover->end[-1]].hovered = false;
                 }
                 if (hover) {
-                    cards[*(hover->end - 1)].hovered = true;
+                    cards[sel ? hover->end[-1] : *hover->begin].hovered = true;
                 }
-            } else if (event->is<sf::Event::MouseButtonPressed>()
-                    || event->is<sf::Event::MouseButtonReleased>()) {
+            } else if (mouse_pressed || mouse_released) {
+                last_pos = sf::Mouse::getPosition(window);
+                if (mouse_pressed) {
+                    if (sel) {
+                        cards[*sel->begin].selected = false;
+                    }
+                    hover = game.select(last_pos);
+                }
                 std::optional<Range> last_sel = sel;
-                if (sel) {
-                    cards[*sel->begin].selected = false;
-                }
+                std::optional<Range> last_hover = hover;
                 if (hover) {
                     Card &card = cards[*hover->begin];
                     if (!card.isVacant()
                             && !std::holds_alternative<Pile>(hover->place)
-                            && event->is<sf::Event::MouseButtonPressed>()) 
+                            && mouse_pressed) 
                     {
                         card.selected = true;
                         drag = sel = hover;
-                        last_pos = sf::Mouse::getPosition(window);
+                        hover = {};
                     }
-                    if (last_sel && !same(last_sel->place, hover->place)) {
+                    if (last_sel && !same(last_sel->place, last_hover->place)) {
                         drag = {};
-                        if (game.tryMove(*last_sel, *hover)) {
+                        if (game.tryMove(*last_sel, *last_hover)) {
                             hover = sel = {};
                         }
                     }
                 } 
-                if (drag && event->is<sf::Event::MouseButtonReleased>()) {
+                if (drag && mouse_released) {
                     std::vector<char> &row = game.getPlace(drag->place);
                     Game::setPilePositions(
                             {row.begin(), row.end(), drag->place},
