@@ -1,2 +1,2 @@
-[Screenshot](screenshot.png)
+![Screenshot](screenshot.png)
 press backspace to undo
