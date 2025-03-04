@@ -45,8 +45,8 @@ enum FaceCard {
 
 char randomCard() {
     static std::random_device rd;
-    //static std::mt19937 gen(rd());
-    static std::mt19937 gen(0);
+    static std::mt19937 gen(rd());
+    //static std::mt19937 gen(0);
     static std::uniform_int_distribution<> distr(0, NUM_CARDS - 1);
     return distr(gen);
 }
