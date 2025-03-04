@@ -165,6 +165,13 @@ struct Range {
 };
 
 class Game : public sf::Drawable {
+    struct Move {
+        Place from;
+        unsigned size;
+        Place to;
+    };
+
+    std::vector<Move> history;
     std::array<std::vector<char>, 4> piles;
     std::array<std::vector<char>, 8> rows;
     std::array<std::vector<char>, 2> extra;
@@ -333,6 +340,7 @@ public:
             || ((std::holds_alternative<Row>(to.place) || std::holds_alternative<Pile>(to.place))
                 && last.fits(first)))
         {
+            history.emplace_back(from.place, size_from, to.place);
             result = true;
             last.selected = last.hovered = false;
             for (iterator it = from.begin; it != from.end; ++it) {
@@ -352,6 +360,29 @@ public:
                     cards[*row_from.begin()].sprite.getPosition());
         }
         return result;
+    }
+
+    ///don't call while dragging
+    bool undo() {
+        if (history.size() == 0) return false;
+        //inefficient, but I don't care anymore
+        for (Card &card : cards) {
+            card.hovered = card.selected = false;
+        }
+        Move move = history.back();
+        history.pop_back();
+        std::vector<char> &row_from = getPlace(move.from);
+        std::vector<char> &row_to = getPlace(move.to);
+        for (iterator it = row_to.end() - move.size; it != row_to.end(); ++it) {
+            row_from.push_back(*it);
+        }
+        for (unsigned i = 0; i < move.size; ++i) {
+            row_to.pop_back();
+        }
+        setPilePositions(
+                {row_from.begin(), row_from.end(), move.from},
+                cards[row_from.front()].sprite.getPosition());
+        return true;
     }
 
     virtual void draw(sf::RenderTarget &target, sf::RenderStates) const override {
@@ -511,6 +542,10 @@ int main() {
                             {row.begin(), row.end(), drag->place},
                             cards[*row.begin()].sprite.getPosition());
                     drag = {};
+                }
+            } else if (auto key = event->getIf<sf::Event::KeyPressed>()) {
+                if (key->code == sf::Keyboard::Key::Backspace && !drag && game.undo()) {
+                    drag = hover = sel = {};
                 }
             }
         }
