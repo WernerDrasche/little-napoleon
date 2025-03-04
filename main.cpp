@@ -46,6 +46,7 @@ enum FaceCard {
 char randomCard() {
     static std::random_device rd;
     static std::mt19937 gen(rd());
+    //static std::mt19937 gen(0);
     static std::uniform_int_distribution<> distr(0, NUM_CARDS - 1);
     return distr(gen);
 }
@@ -67,7 +68,6 @@ struct Card : public sf::Drawable {
     }
 
     constexpr bool fits(const Card &other) {
-        //return true;
         return id / CARDS_PER_SUIT == other.id / CARDS_PER_SUIT
             && ((id + 1) % CARDS_PER_SUIT == other.id % CARDS_PER_SUIT
                     || (other.id + 1) % CARDS_PER_SUIT == id % CARDS_PER_SUIT);
@@ -257,11 +257,12 @@ public:
         cellar.push_back(next_vacant);
     }
 
-    bool hasVacantRow() const {
+    char numVacantRows() const {
+        char count = 0;
         for (const auto &row : rows) {
-            if (row.size() == 1) return true;
+            if (row.size() == 1) ++count;
         }
-        return false;
+        return count;
     }
 
     bool canSelectCellar() const {
@@ -280,7 +281,7 @@ public:
                 if (card.selected) continue;
                 if (card.sprite.getGlobalBounds().contains(pos)) {
                     Range range(it, row.end(), Row(i));
-                    if (range.size() == 1 || (hasVacantRow() && range.isRun())) {
+                    if (range.size() == 1 || (numVacantRows() && range.isRun())) {
                         return range;
                     }
                     return {};
@@ -338,11 +339,16 @@ public:
                 && last.isVacant()
                 && size_from == 1)
             || ((std::holds_alternative<Row>(to.place) || std::holds_alternative<Pile>(to.place))
-                && last.fits(first)))
+                && last.fits(first))
+            || (std::holds_alternative<Row>(to.place)
+                && last.isVacant()
+                && (size_from == 1 || numVacantRows() >= 2)))
         {
             history.emplace_back(from.place, size_from, to.place);
             result = true;
             last.selected = last.hovered = false;
+            Card &tmp = cards[*to.begin];
+            tmp.selected = tmp.hovered = false;
             for (iterator it = from.begin; it != from.end; ++it) {
                 row_to.push_back(*it);
             }
@@ -484,6 +490,7 @@ int main() {
     window.setFramerateLimit(FPS);
     std::optional<Range> sel, drag, hover;
     sf::Vector2i last_pos;
+    bool was_dragged = false;
     while (window.isOpen()) {
         while (const std::optional event = window.pollEvent()) {
             bool mouse_pressed = event->is<sf::Event::MouseButtonPressed>();
@@ -495,6 +502,7 @@ int main() {
             if (event->is<sf::Event::MouseMoved>()) {
                 sf::Vector2i pos = sf::Mouse::getPosition(window);
                 if (drag) {
+                    was_dragged = true;
                     sf::Vector2i delta = pos - last_pos;
                     last_pos = pos;
                     sf::Vector2f new_pos = cards[*sel->begin].update(delta);
@@ -527,6 +535,7 @@ int main() {
                             && !card.isVacant()) 
                     {
                         card.selected = true;
+                        card.hovered = false;
                         drag = sel = hover;
                         hover = {};
                     }
@@ -535,12 +544,19 @@ int main() {
                             drag = hover = sel = {};
                         }
                     }
+                } else if (mouse_pressed) {
+                    sel = {};
                 } 
-                if (drag && mouse_released) {
+                if (was_dragged && drag && mouse_released) {
                     std::vector<char> &row = game.getPlace(drag->place);
                     Game::setPilePositions(
                             {row.begin(), row.end(), drag->place},
                             cards[*row.begin()].sprite.getPosition());
+                    cards[*drag->begin].selected = false;
+                    sel = {};
+                }
+                if (mouse_released) {
+                    was_dragged = false;
                     drag = {};
                 }
             } else if (auto key = event->getIf<sf::Event::KeyPressed>()) {
