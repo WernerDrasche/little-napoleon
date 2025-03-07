@@ -12,7 +12,7 @@
 #define CARD_WIDTH     222
 #define CARD_HEIGHT    323
 #define CARDS_PER_SUIT 13
-#define NUM_VACANT 9
+#define NUM_VACANT 11
 
 using iterator = std::vector<char>::iterator;
 
@@ -169,6 +169,7 @@ class Game : public sf::Drawable {
         Place from;
         unsigned size;
         Place to;
+        bool reversed;
     };
 
     std::vector<Move> history;
@@ -240,7 +241,7 @@ public:
             setPilePositions({rows[i].begin(), rows[i].end(), Row(i)}, pos);
             pos.y += CARD_HS + ROW_MARGIN;
         }
-        initPile(extra[0], used, 4, nullptr);
+        initPile(extra[0], used, 4, &next_vacant);
         setPilePositions({extra[0].begin(), extra[0].end(), Extra(0)}, pos);
         pos.y = START_Y;
         pos.x += (CARD_WS + CARD_MARGIN) * 2;
@@ -249,7 +250,7 @@ public:
             setPilePositions({rows[i].begin(), rows[i].end(), Row(i)}, pos);
             pos.y += CARD_HS + ROW_MARGIN;
         }
-        initPile(extra[1], used, 4, nullptr);
+        initPile(extra[1], used, 4, &next_vacant);
         setPilePositions({extra[1].begin(), extra[1].end(), Extra(1)}, pos);
         pos.x -= CARD_MARGIN + CARD_WS;
         cards[next_vacant].sprite.setPosition(pos);
@@ -267,7 +268,7 @@ public:
 
     bool canSelectCellar() const {
         for (const auto &row : extra) {
-            if (row.size() == 0) return true;
+            if (row.size() == 1) return true;
         }
         return false;
     }
@@ -292,7 +293,7 @@ public:
             std::vector<char> &row = extra[i];
             for (iterator it = row.end(); it-- != row.begin();) {
                 Card &card = cards[*it];
-                if (card.selected) continue;
+                if (card.selected || card.isVacant()) continue;
                 if (card.sprite.getGlobalBounds().contains(pos)) {
                     return it == row.end() - 1 ? Range(it, row.end(), Extra(i)) : std::optional<Range>();
                 }
@@ -327,7 +328,7 @@ public:
         }
     }
 
-    bool tryMove(const Range &from, const Range &to) {
+    bool tryMove(const Range &from, const Range &to, bool reversed) {
         bool result = false;
         Card &last = cards[*(to.end - 1)];
         Card &first = cards[*from.begin];
@@ -342,9 +343,9 @@ public:
                 && last.fits(first))
             || (std::holds_alternative<Row>(to.place)
                 && last.isVacant()
-                && (size_from == 1 || numVacantRows() >= 2)))
+                && (size_from == 1 || numVacantRows() >= 2 || reversed)))
         {
-            history.emplace_back(from.place, size_from, to.place);
+            history.emplace_back(from.place, size_from, to.place, reversed);
             result = true;
             last.selected = last.hovered = false;
             Card &tmp = cards[*to.begin];
@@ -379,8 +380,14 @@ public:
         history.pop_back();
         std::vector<char> &row_from = getPlace(move.from);
         std::vector<char> &row_to = getPlace(move.to);
-        for (iterator it = row_to.end() - move.size; it != row_to.end(); ++it) {
-            row_from.push_back(*it);
+        if (move.reversed) {
+            for (iterator it = row_to.end(); it-- != row_to.end() - move.size;) {
+                row_from.push_back(*it);
+            }
+        } else {
+            for (iterator it = row_to.end() - move.size; it != row_to.end(); ++it) {
+                row_from.push_back(*it);
+            }
         }
         for (unsigned i = 0; i < move.size; ++i) {
             row_to.pop_back();
@@ -479,7 +486,7 @@ void loadCards() {
     for (unsigned i = 0; i < NUM_VACANT; ++i) {
         cards.emplace_back(card_textures[NUM_CARDS].getTexture(), NUM_CARDS + i);
     }
-    assert(cards.size() == 61);
+    assert(cards.size() == 63);
 }
 
 int main() {
@@ -491,6 +498,7 @@ int main() {
     std::optional<Range> sel, drag, hover;
     sf::Vector2i last_pos;
     bool was_dragged = false;
+    bool reversed = false;
     while (window.isOpen()) {
         while (const std::optional event = window.pollEvent()) {
             bool mouse_pressed = event->is<sf::Event::MouseButtonPressed>();
@@ -553,7 +561,7 @@ int main() {
                         hover = {};
                     }
                     if (last_sel && !same(last_sel->place, last_hover->place)) {
-                        if (game.tryMove(*last_sel, *last_hover)) {
+                        if (game.tryMove(*last_sel, *last_hover, reversed)) {
                             drag = hover = sel = {};
                         }
                     }
@@ -566,15 +574,35 @@ int main() {
                             {row.begin(), row.end(), drag->place},
                             cards[*row.begin()].sprite.getPosition());
                     cards[*drag->begin].selected = false;
+                    if (reversed) {
+                        std::reverse(drag->begin, drag->end);
+                        Game::setPilePositions(*drag, cards[drag->end[-1]].sprite.getPosition());
+                    }
                     sel = {};
                 }
                 if (mouse_released) {
-                    was_dragged = false;
+                    reversed = was_dragged = false;
                     drag = {};
                 }
             } else if (auto key = event->getIf<sf::Event::KeyPressed>()) {
-                if (key->code == sf::Keyboard::Key::Backspace && !drag && game.undo()) {
-                    drag = hover = sel = {};
+                switch (key->code) {
+                using enum sf::Keyboard::Key;
+                case Backspace:
+                    if (!drag && game.undo()) {
+                        drag = hover = sel = {};
+                    }
+                    break;
+                case R:
+                    if (drag && drag->size() > 1 && game.numVacantRows()) {
+                        cards[*drag->begin].selected = false;
+                        std::reverse(drag->begin, drag->end);
+                        Game::setPilePositions(*drag, cards[drag->end[-1]].sprite.getPosition());
+                        cards[*drag->begin].selected = true;
+                        reversed = !reversed;
+                    }
+                    break;
+                default:
+                    break;
                 }
             }
         }
