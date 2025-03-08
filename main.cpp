@@ -338,7 +338,8 @@ public:
         first.selected = first.hovered = false;
         if ((std::holds_alternative<Cellar>(to.place) 
                 && last.isVacant()
-                && size_from == 1)
+                && size_from == 1
+                && !std::holds_alternative<Extra>(from.place))
             || ((std::holds_alternative<Row>(to.place) || std::holds_alternative<Pile>(to.place))
                 && last.fits(first))
             || (std::holds_alternative<Row>(to.place)
@@ -501,11 +502,19 @@ int main() {
     bool reversed = false;
     while (window.isOpen()) {
         while (const std::optional event = window.pollEvent()) {
-            bool mouse_pressed = event->is<sf::Event::MouseButtonPressed>();
-            bool mouse_released = event->is<sf::Event::MouseButtonReleased>();
             if (event->is<sf::Event::Closed>()) {
                 window.close();
                 break;
+            }
+            bool mouse_left = false;
+            bool mouse_right = false;
+            bool mouse_left_released = event->is<sf::Event::MouseButtonReleased>();
+            if (auto mouse_pressed = event->getIf<sf::Event::MouseButtonPressed>()) {
+                using enum sf::Mouse::Button;
+                mouse_left = mouse_pressed->button == Left;
+                mouse_right = mouse_pressed->button == Right;
+            } else if (auto mouse_released = event->getIf<sf::Event::MouseButtonReleased>()) {
+                mouse_left_released = mouse_released->button == sf::Mouse::Button::Left;
             }
             if (event->is<sf::Event::MouseMoved>()) {
                 sf::Vector2i pos = sf::Mouse::getPosition(window);
@@ -528,18 +537,17 @@ int main() {
                         (int)new_pos.y + (int)(CARD_HS / 2),
                     };
                 }
-                std::optional<Range> last_hover = hover;
-                hover = game.select(pos);
-                if (last_hover) {
-                    cards[*last_hover->begin].hovered = false;
-                    cards[last_hover->end[-1]].hovered = false;
+                if (hover) {
+                    cards[*hover->begin].hovered = false;
+                    cards[hover->end[-1]].hovered = false;
                 }
+                hover = game.select(pos);
                 if (hover) {
                     cards[sel ? hover->end[-1] : *hover->begin].hovered = true;
                 }
-            } else if (mouse_pressed || mouse_released) {
+            } else if (mouse_left || mouse_left_released) {
                 last_pos = sf::Mouse::getPosition(window);
-                if (mouse_pressed) {
+                if (mouse_left) {
                     if (sel) {
                         cards[*sel->begin].selected = false;
                     }
@@ -549,7 +557,7 @@ int main() {
                 std::optional<Range> last_hover = hover;
                 if (hover) {
                     Card &card = cards[*hover->begin];
-                    if (mouse_pressed
+                    if (mouse_left
                             && !std::holds_alternative<Pile>(hover->place)
                             && (!std::holds_alternative<Cellar>(hover->place) || game.canSelectCellar())
                             && !card.isVacant()) 
@@ -565,10 +573,10 @@ int main() {
                             drag = hover = sel = {};
                         }
                     }
-                } else if (mouse_pressed) {
+                } else if (mouse_left) {
                     sel = {};
                 } 
-                if (was_dragged && drag && mouse_released) {
+                if (was_dragged && drag && mouse_left_released) {
                     std::vector<char> &row = game.getPlace(drag->place);
                     Game::setPilePositions(
                             {row.begin(), row.end(), drag->place},
@@ -580,19 +588,14 @@ int main() {
                     }
                     sel = {};
                 }
-                if (mouse_released) {
+                if (mouse_left_released) {
                     reversed = was_dragged = false;
                     drag = {};
                 }
-            } else if (auto key = event->getIf<sf::Event::KeyPressed>()) {
-                switch (key->code) {
+            } else if (mouse_right || event->is<sf::Event::KeyPressed>()) {
                 using enum sf::Keyboard::Key;
-                case Backspace:
-                    if (!drag && game.undo()) {
-                        drag = hover = sel = {};
-                    }
-                    break;
-                case R:
+                auto key = event->getIf<sf::Event::KeyPressed>();
+                if (mouse_right || key->code == R) {
                     if (drag && drag->size() > 1 && game.numVacantRows()) {
                         cards[*drag->begin].selected = false;
                         std::reverse(drag->begin, drag->end);
@@ -600,9 +603,10 @@ int main() {
                         cards[*drag->begin].selected = true;
                         reversed = !reversed;
                     }
-                    break;
-                default:
-                    break;
+                } else if (key->code == Backspace) {
+                    if (!drag && game.undo()) {
+                        drag = hover = sel = {};
+                    }
                 }
             }
         }
