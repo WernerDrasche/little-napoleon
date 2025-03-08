@@ -61,6 +61,7 @@ struct Card : public sf::Drawable {
         : sprite(texture)
         , id(id)
         , selected(false)
+        , hovered(false)
     {}
 
     constexpr bool isVacant() const {
