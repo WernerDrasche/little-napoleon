@@ -496,6 +496,9 @@ int main() {
     Game game;
 
     sf::RenderWindow window(sf::VideoMode({WINDOW_WIDTH, WINDOW_HEIGHT}), "SFML");
+    std::optional<sf::Vector2u> window_size({WINDOW_WIDTH, WINDOW_HEIGHT});
+    window.setMaximumSize(window_size);
+    window.setMinimumSize(window_size);
     window.setFramerateLimit(FPS);
     std::optional<Range> sel, drag, hover;
     sf::Vector2i last_pos;
