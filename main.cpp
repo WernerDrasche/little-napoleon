@@ -27,6 +27,7 @@ const sf::Color COLOR_BG = {40, 150, 80};
 const sf::Color COLOR_CARD = sf::Color::White;
 const sf::Color COLOR_OUTLINE = sf::Color::Black;
 const sf::Color COLOR_SELECT = sf::Color::Blue;
+const sf::Color COLOR_TEXT = sf::Color::Black;
 
 char strbuf[1024];
 
@@ -142,6 +143,7 @@ bool same(Place a, Place b) {
 
 std::array<sf::RenderTexture, NUM_CARDS + 1> card_textures;
 std::vector<Card> cards;
+sf::Font font("assets/font/joystix_mono.otf");
 
 struct Range {
     iterator begin;
@@ -500,11 +502,16 @@ int main() {
     std::optional<sf::Vector2u> window_size({WINDOW_WIDTH, WINDOW_HEIGHT});
     window.setMaximumSize(window_size);
     window.setMinimumSize(window_size);
+    sf::Vector2u desktop_size = sf::VideoMode::getDesktopMode().size;
+    window.setPosition({
+            (int)(desktop_size.x - WINDOW_WIDTH) / 2,
+            (int)(desktop_size.y - WINDOW_HEIGHT) / 2
+    });
     window.setFramerateLimit(FPS);
     std::optional<Range> sel, drag, hover;
+    bool was_dragged, reversed, reshuffle_noconfirm;
+    was_dragged = reversed = reshuffle_noconfirm = false;
     sf::Vector2i last_pos;
-    bool was_dragged = false;
-    bool reversed = false;
     while (window.isOpen()) {
         while (const std::optional event = window.pollEvent()) {
             if (event->is<sf::Event::Closed>()) {
@@ -611,6 +618,30 @@ int main() {
                 } else if (key->code == Backspace) {
                     if (!drag && game.undo()) {
                         drag = hover = sel = {};
+                    }
+                } else if (key->code == S && key->control) {
+                    bool reshuffle = true;
+                    if (!reshuffle_noconfirm) {
+                        sf::Text text(font, "Press Enter to confirm reshuffle", 25);
+                        text.setFillColor(COLOR_TEXT);
+                        text.setPosition({(WINDOW_WIDTH - text.getGlobalBounds().size.x) / 2, 0});
+                        window.draw(text);
+                        while (true) {
+                            window.display();
+                            std::optional event = window.pollEvent();
+                            if (!event) continue;
+                            if (auto key = event->getIf<sf::Event::KeyPressed>()) {
+                                if (key->code != Enter) {
+                                    reshuffle = false;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    if (reshuffle) {
+                        game = Game();
+                        drag = hover = sel = {};
+                        was_dragged = reversed = reshuffle_noconfirm = false;
                     }
                 }
             }
