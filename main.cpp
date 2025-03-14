@@ -1,6 +1,7 @@
 #include <SFML/Graphics.hpp>
 #include <random>
 #include <algorithm>
+#include <chrono>
 
 #define WINDOW_WIDTH  1200
 #define WINDOW_HEIGHT 800
@@ -9,13 +10,18 @@
 #define CARD_SCALE    0.4
 #define CARD_MARGIN   10
 #define ROW_MARGIN    20
+#define FONT_SIZE     25
 
 #define CARD_WIDTH     222
 #define CARD_HEIGHT    323
 #define CARDS_PER_SUIT 13
 #define NUM_VACANT 11
+#define NSEC_PER_SEC 1000000000
 
 using iterator = std::vector<char>::iterator;
+using chrono_clock = std::chrono::steady_clock;
+using chrono_nsec = std::chrono::nanoseconds;
+using chrono_time_point = std::chrono::time_point<chrono_clock, chrono_nsec>;
 
 const char NUM_CARDS = 4 * CARDS_PER_SUIT;
 const float CARD_WS = CARD_WIDTH * CARD_SCALE + 2 * OUTLINE_WIDTH;
@@ -27,7 +33,6 @@ const sf::Color COLOR_BG = {40, 150, 80};
 const sf::Color COLOR_CARD = sf::Color::White;
 const sf::Color COLOR_OUTLINE = sf::Color::Black;
 const sf::Color COLOR_SELECT = sf::Color::Blue;
-const sf::Color COLOR_TEXT = sf::Color::Black;
 
 char strbuf[1024];
 
@@ -177,12 +182,18 @@ class Game : public sf::Drawable {
     };
 
     class Stats {
+        friend Game;
+
+        sf::Text text{font, "", FONT_SIZE};
+        sf::Text reshuffle_info{font, "Press Ctrl+S to shuffle cards", FONT_SIZE};
         unsigned num_consecutive_undos_allow = 1;
         unsigned consecutive_undos = 0;
+        chrono_time_point start = std::chrono::steady_clock::now();
     public:
         unsigned moves_real = 0;
         unsigned moves = 0;
         bool used_undo = false;
+        bool won = false;
 
         void registerMove(Move move) {
             ++moves;
@@ -196,6 +207,27 @@ class Game : public sf::Drawable {
                 used_undo = true;
             }
             moves_real -= move.size > 1 && !move.reversed ? 2 * move.size : move.size;
+        }
+
+        ///call only once
+        void registerWin() {
+            assert(!won);
+            won = true;
+            chrono_time_point end = std::chrono::steady_clock::now();
+            auto duration = end - start;
+            long long nsecs = duration.count();
+            unsigned secs = nsecs / NSEC_PER_SEC;
+            unsigned mins = secs / 60;
+            secs %= 60;
+            snprintf(strbuf, sizeof(strbuf), "Time  %u:%u\n"
+                                             "Moves %u\n"
+                                             "Undo  %s",
+                    mins, secs, moves_real, used_undo ? "Yes" : "No");
+            text = sf::Text(font, strbuf, FONT_SIZE);
+            sf::Vector2f text_size = text.getGlobalBounds().size;
+            text.setPosition({(WINDOW_WIDTH / 2.f - text_size.x) / 2, (WINDOW_HEIGHT / 2.f - text_size.y) / 2});
+            sf::Vector2f info_size = reshuffle_info.getGlobalBounds().size;
+            reshuffle_info.setPosition({(WINDOW_WIDTH - info_size.x) / 2, 0});
         }
     };
 
@@ -286,6 +318,10 @@ public:
         cellar.push_back(next_vacant);
     }
 
+    constexpr bool won() const {
+        return stats.won;
+    }
+
     char numVacantRows() const {
         char count = 0;
         for (const auto &row : rows) {
@@ -294,11 +330,12 @@ public:
         return count;
     }
 
-    bool canSelectCellar() const {
+    char numVacantExtra() const {
+        char count = 0;
         for (const auto &row : extra) {
-            if (row.size() == 1) return true;
+            if (row.size() == 1) ++count;
         }
-        return false;
+        return count;
     }
 
     std::optional<Range> select(sf::Vector2i mouse_pos) {
@@ -392,6 +429,13 @@ public:
             Game::setPilePositions(
                     {row_to.begin(), row_to.end(), to.place},
                     cards[*row_to.begin()].sprite.getPosition());
+
+            if (numVacantRows() == 8 
+                    && numVacantExtra() == 2 
+                    && cellar.size() == 1)
+            {
+                stats.registerWin();
+            }
         } else {
             Game::setPilePositions(
                     {row_from.begin(), row_from.end(), from.place},
@@ -448,6 +492,10 @@ public:
         target.draw(cards[piles[1].back()]);
         target.draw(cards[piles[2].back()]);
         target.draw(cards[piles[3].back()]);
+        if (won()) {
+            target.draw(stats.text);
+            target.draw(stats.reshuffle_info);
+        }
     }
 };
 
@@ -536,12 +584,12 @@ int main() {
     });
     window.setFramerateLimit(FPS);
     std::optional<Range> sel, drag, hover;
-    bool was_dragged, reversed, reshuffle_noconfirm;
-    was_dragged = reversed = reshuffle_noconfirm = false;
+    bool was_dragged, reversed, should_close;
+    was_dragged = reversed = should_close = false;
     sf::Vector2i last_pos;
     while (window.isOpen()) {
         while (const std::optional event = window.pollEvent()) {
-            if (event->is<sf::Event::Closed>()) {
+            if (should_close || event->is<sf::Event::Closed>()) {
                 window.close();
                 break;
             }
@@ -598,7 +646,7 @@ int main() {
                     Card &card = cards[*hover->begin];
                     if (mouse_left
                             && !std::holds_alternative<Pile>(hover->place)
-                            && (!std::holds_alternative<Cellar>(hover->place) || game.canSelectCellar())
+                            && (!std::holds_alternative<Cellar>(hover->place) || game.numVacantExtra())
                             && !card.isVacant()) 
                     {
                         card.selected = true;
@@ -648,19 +696,24 @@ int main() {
                     }
                 } else if (key->code == S && key->control) {
                     bool reshuffle = true;
-                    if (!reshuffle_noconfirm) {
-                        sf::Text text(font, "Press Enter to confirm reshuffle", 25);
-                        text.setFillColor(COLOR_TEXT);
+                    if (!game.won()) {
+                        sf::Text text(font, "Press Enter to confirm reshuffle", FONT_SIZE);
                         text.setPosition({(WINDOW_WIDTH - text.getGlobalBounds().size.x) / 2, 0});
                         window.draw(text);
                         while (true) {
                             window.display();
                             std::optional event = window.pollEvent();
                             if (!event) continue;
-                            if (auto key = event->getIf<sf::Event::KeyPressed>()) {
+                            if (event->is<sf::Event::Closed>()) {
+                                should_close = true;
+                                break;
+                            } else if (auto key = event->getIf<sf::Event::KeyPressed>()) {
                                 if (key->code != Enter) {
                                     reshuffle = false;
                                 }
+                                break;
+                            } else if (event->is<sf::Event::MouseButtonPressed>()) {
+                                reshuffle = false;
                                 break;
                             }
                         }
@@ -668,7 +721,7 @@ int main() {
                     if (reshuffle) {
                         game = Game();
                         drag = hover = sel = {};
-                        was_dragged = reversed = reshuffle_noconfirm = false;
+                        was_dragged = reversed = false;
                     }
                 }
             }
