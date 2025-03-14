@@ -176,11 +176,35 @@ class Game : public sf::Drawable {
         bool reversed;
     };
 
+    class Stats {
+        unsigned num_consecutive_undos_allow = 1;
+        unsigned consecutive_undos = 0;
+    public:
+        unsigned moves_real = 0;
+        unsigned moves = 0;
+        bool used_undo = false;
+
+        void registerMove(Move move) {
+            ++moves;
+            moves_real += move.size > 1 && !move.reversed ? 2 * move.size : move.size;
+            consecutive_undos = 0;
+        }
+
+        void registerUndo(Move move) {
+            --moves;
+            if (++consecutive_undos > num_consecutive_undos_allow) {
+                used_undo = true;
+            }
+            moves_real -= move.size > 1 && !move.reversed ? 2 * move.size : move.size;
+        }
+    };
+
     std::vector<Move> history;
     std::array<std::vector<char>, 4> piles;
     std::array<std::vector<char>, 8> rows;
     std::array<std::vector<char>, 2> extra;
     std::vector<char> cellar;
+    Stats stats;
 
 public:
     static void setPilePositions(Range range, sf::Vector2f pos)
@@ -350,7 +374,9 @@ public:
                 && last.isVacant()
                 && (size_from == 1 || numVacantRows() >= 2 || reversed)))
         {
-            history.emplace_back(from.place, size_from, to.place, reversed);
+            Move move(from.place, size_from, to.place, reversed);
+            history.push_back(move);
+            stats.registerMove(move);
             result = true;
             last.selected = last.hovered = false;
             Card &tmp = cards[*to.begin];
@@ -383,6 +409,7 @@ public:
         }
         Move move = history.back();
         history.pop_back();
+        stats.registerUndo(move);
         std::vector<char> &row_from = getPlace(move.from);
         std::vector<char> &row_to = getPlace(move.to);
         if (move.reversed) {
