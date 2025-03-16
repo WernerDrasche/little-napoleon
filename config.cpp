@@ -1,9 +1,14 @@
+#ifdef _WIN32
+#define err(code, msg, arg) throw std::runtime_error("Fatal")
+#else
+#include <err.h>
+#endif
+
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <charconv>
 #include <cstdio>
-#include <err.h>
 #include <cassert>
 #include "config.hpp"
 
@@ -33,7 +38,7 @@ bool parseBool(std::string_view str) {
 
 char parseNumber(std::string_view str) {
     int num;
-    auto res = std::from_chars(str.begin(), str.end(), num);
+    auto res = std::from_chars(str.data(), str.data() + str.size(), num);
     if (res.ec == std::errc::invalid_argument
             || num < 0 || num > 255)
     {
