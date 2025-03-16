@@ -747,7 +747,9 @@ int main() {
                                 should_close = true;
                                 break;
                             } else if (auto key = event->getIf<sf::Event::KeyPressed>()) {
-                                if (key->code != Enter) {
+                                if (key->code == Enter) {
+                                    overall_stats.recordLoss();
+                                } else {
                                     reshuffle = false;
                                 }
                                 break;
