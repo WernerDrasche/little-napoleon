@@ -1,0 +1,5 @@
+allow_undo = true
+number_of_consecutive_undos_without_counting_as_undo_used = 1
+consider_undo_used_wins_in_statistic = false
+closing_running_game_counts_as_loss = true
+count_real_moves = true
