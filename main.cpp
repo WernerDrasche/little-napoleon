@@ -1,7 +1,9 @@
 #include <SFML/Graphics.hpp>
-#include <random>
 #include <algorithm>
+#include <random>
 #include <chrono>
+#include <list>
+#include "config.hpp"
 
 #define WINDOW_WIDTH  1200
 #define WINDOW_HEIGHT 800
@@ -49,14 +51,6 @@ enum FaceCard {
     Jack = 11,
     Queen,
 };
-
-char randomCard() {
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
-    //static std::mt19937 gen(0);
-    static std::uniform_int_distribution<> distr(0, NUM_CARDS - 1);
-    return distr(gen);
-}
 
 struct Card : public sf::Drawable {
     sf::Sprite sprite;
@@ -149,6 +143,8 @@ bool same(Place a, Place b) {
 std::array<sf::RenderTexture, NUM_CARDS + 1> card_textures;
 std::vector<Card> cards;
 sf::Font font("assets/font/joystix_mono.otf");
+Config config;
+Statistic overall_stats;
 
 struct Range {
     iterator begin;
@@ -173,6 +169,11 @@ struct Range {
     }
 };
 
+struct Duration {
+    unsigned mins;
+    unsigned secs;
+};
+
 class Game : public sf::Drawable {
     struct Move {
         Place from;
@@ -184,50 +185,72 @@ class Game : public sf::Drawable {
     class Stats {
         friend Game;
 
-        sf::Text text{font, "", FONT_SIZE};
+        sf::Text text_left{font, "", FONT_SIZE};
+        sf::Text text_right{font, "", FONT_SIZE};
         sf::Text reshuffle_info{font, "Press Ctrl+S to shuffle cards", FONT_SIZE};
-        unsigned num_consecutive_undos_allow = 1;
         unsigned consecutive_undos = 0;
+        bool won = false;
         chrono_time_point start = std::chrono::steady_clock::now();
     public:
-        unsigned moves_real = 0;
+        unsigned real_moves = 0;
         unsigned moves = 0;
         bool used_undo = false;
-        bool won = false;
 
-        void registerMove(Move move) {
-            ++moves;
-            moves_real += move.size > 1 && !move.reversed ? 2 * move.size : move.size;
-            consecutive_undos = 0;
+        unsigned getMoves() const {
+            return config.real_moves ? real_moves : moves;
         }
 
-        void registerUndo(Move move) {
-            --moves;
-            if (++consecutive_undos > num_consecutive_undos_allow) {
-                used_undo = true;
-            }
-            moves_real -= move.size > 1 && !move.reversed ? 2 * move.size : move.size;
-        }
-
-        ///call only once
-        void registerWin() {
-            assert(!won);
-            won = true;
+        Duration timeElapsed() const {
             chrono_time_point end = std::chrono::steady_clock::now();
             auto duration = end - start;
             long long nsecs = duration.count();
             unsigned secs = nsecs / NSEC_PER_SEC;
             unsigned mins = secs / 60;
             secs %= 60;
+            return {mins, secs};
+        }
+
+        void registerMove(Move move) {
+            ++moves;
+            real_moves += move.size > 1 && !move.reversed ? 2 * move.size : move.size;
+            consecutive_undos = 0;
+        }
+
+        void registerUndo(Move move) {
+            --moves;
+            if (++consecutive_undos > config.num_cons_undos_allow) {
+                used_undo = true;
+            }
+            real_moves -= move.size > 1 && !move.reversed ? 2 * move.size : move.size;
+        }
+
+        ///call only once
+        void registerWin() {
+            assert(!won);
+            won = true;
+            if (!used_undo || config.consider_undo_wins) {
+                overall_stats.recordWin(getMoves());
+            }
+            Duration dur = timeElapsed();
             snprintf(strbuf, sizeof(strbuf), "Time  %u:%u\n"
                                              "Moves %u\n"
                                              "Undo  %s",
-                    mins, secs, moves_real, used_undo ? "Yes" : "No");
-            text = sf::Text(font, strbuf, FONT_SIZE);
-            sf::Vector2f text_size = text.getGlobalBounds().size;
-            text.setPosition({(WINDOW_WIDTH / 2.f - text_size.x) / 2, (WINDOW_HEIGHT / 2.f - text_size.y) / 2});
-            sf::Vector2f info_size = reshuffle_info.getGlobalBounds().size;
-            reshuffle_info.setPosition({(WINDOW_WIDTH - info_size.x) / 2, 0});
+                    dur.mins, dur.secs, getMoves(), used_undo ? "Yes" : "No");
+            text_left = sf::Text(font, strbuf, FONT_SIZE);
+            sf::Vector2f text_size = text_left.getGlobalBounds().size;
+            text_left.setPosition({(WINDOW_WIDTH / 2.f - text_size.x) / 2, (WINDOW_HEIGHT / 2.f - text_size.y) / 2});
+            text_size = reshuffle_info.getGlobalBounds().size;
+            reshuffle_info.setPosition({(WINDOW_WIDTH - text_size.x) / 2, 0});
+            unsigned games = overall_stats.wins + overall_stats.losses;
+            unsigned winrate = ((double)overall_stats.wins / games) * 100;
+            snprintf(strbuf, sizeof(strbuf), "Games     %u\n"
+                                             "Wins      %u\n"
+                                             "Winrate   %u%%\n"
+                                             "Avg.Moves %u",
+                    games, overall_stats.wins, winrate, (unsigned)overall_stats.moves_avg);
+            text_right = sf::Text(font, strbuf, FONT_SIZE);
+            text_size = text_right.getGlobalBounds().size;
+            text_right.setPosition({WINDOW_WIDTH * 0.75f - text_size.x / 2, (WINDOW_HEIGHT / 2.f - text_size.y) / 2});
         }
     };
 
@@ -236,9 +259,10 @@ class Game : public sf::Drawable {
     std::array<std::vector<char>, 8> rows;
     std::array<std::vector<char>, 2> extra;
     std::vector<char> cellar;
-    Stats stats;
 
 public:
+    Stats stats;
+
     static void setPilePositions(Range range, sf::Vector2f pos)
     {
         bool stacked = std::holds_alternative<Row>(range.place);
@@ -258,7 +282,7 @@ public:
 
     static void initPile(
             std::vector<char> &vec,
-            std::array<char, NUM_CARDS> &used,
+            std::list<char> &shuffled,
             unsigned n,
             char *next_vacant)
     {
@@ -268,27 +292,34 @@ public:
             vec.push_back((*next_vacant)++);
         }
         for (unsigned i = 0; i < n; ++i) {
-            char c = randomCard();
-            for (; used[c] == -1; c = (c + 1) % NUM_CARDS);
-            used[c] = -1;
+            char c = shuffled.back();
+            shuffled.pop_back();
             vec.push_back(c);
         }
     }
 
     Game() {
         char next_vacant = NUM_CARDS;
-        std::array<char, NUM_CARDS> used;
+        std::array<char, NUM_CARDS> tmp;
         for (unsigned i = 0; i < NUM_CARDS; ++i) {
-            used[i] = i;
+            tmp[i] = i;
+        }
+        static std::random_device rd;
+        static std::mt19937 g(rd());
+        //static std::mt19937 g(0);
+        std::shuffle(tmp.begin(), tmp.end(), g);
+        std::list<char> shuffled;
+        for (unsigned i = 0; i < NUM_CARDS; ++i) {
+            shuffled.push_back(tmp[i]);
         }
         sf::Vector2f pos = {
             (WINDOW_WIDTH - CARD_WS) / 2,
             START_Y,
         };
-        char c = randomCard() % CARDS_PER_SUIT;
+        char c = shuffled.back() % CARDS_PER_SUIT;
         for (unsigned i = 0; i < 4; ++i) {
+            shuffled.remove(c);
             cards[c].sprite.setPosition(pos);
-            used[c] = -1;
             piles[i].reserve(CARDS_PER_SUIT);
             piles[i].push_back(c);
             c += CARDS_PER_SUIT;
@@ -297,20 +328,20 @@ public:
         pos.y = START_Y;
         pos.x -= CARD_MARGIN + CARD_WS;
         for (unsigned i = 0; i < 4; ++i) {
-            initPile(rows[i], used, 5, &next_vacant);
+            initPile(rows[i], shuffled, 5, &next_vacant);
             setPilePositions({rows[i].begin(), rows[i].end(), Row(i)}, pos);
             pos.y += CARD_HS + ROW_MARGIN;
         }
-        initPile(extra[0], used, 4, &next_vacant);
+        initPile(extra[0], shuffled, 4, &next_vacant);
         setPilePositions({extra[0].begin(), extra[0].end(), Extra(0)}, pos);
         pos.y = START_Y;
         pos.x += (CARD_WS + CARD_MARGIN) * 2;
         for (unsigned i = 4; i < 8; ++i) {
-            initPile(rows[i], used, 5, &next_vacant);
+            initPile(rows[i], shuffled, 5, &next_vacant);
             setPilePositions({rows[i].begin(), rows[i].end(), Row(i)}, pos);
             pos.y += CARD_HS + ROW_MARGIN;
         }
-        initPile(extra[1], used, 4, &next_vacant);
+        initPile(extra[1], shuffled, 4, &next_vacant);
         setPilePositions({extra[1].begin(), extra[1].end(), Extra(1)}, pos);
         pos.x -= CARD_MARGIN + CARD_WS;
         cards[next_vacant].sprite.setPosition(pos);
@@ -493,8 +524,14 @@ public:
         target.draw(cards[piles[2].back()]);
         target.draw(cards[piles[3].back()]);
         if (won()) {
-            target.draw(stats.text);
+            target.draw(stats.text_left);
+            target.draw(stats.text_right);
             target.draw(stats.reshuffle_info);
+        } else {
+            Duration dur = stats.timeElapsed();
+            snprintf(strbuf, sizeof(strbuf), "%u:%u", dur.mins, dur.secs);
+            sf::Text text(font, strbuf, FONT_SIZE);
+            target.draw(text);
         }
     }
 };
@@ -570,6 +607,8 @@ void loadCards() {
 }
 
 int main() {
+    config.parse(CONFIG_FILE);
+    overall_stats.load(STATS_FILE, config);
     loadCards();
     Game game;
 
@@ -690,17 +729,17 @@ int main() {
                         cards[*drag->begin].selected = true;
                         reversed = !reversed;
                     }
-                } else if (key->code == Backspace) {
-                    if (!drag && game.undo()) {
-                        drag = hover = sel = {};
-                    }
-                } else if (key->code == S && key->control) {
+                } else if (key->code == Backspace && config.enable_undo && !drag && game.undo()) {
+                    drag = hover = sel = {};
+                } else if (key->code == S && key->control && !drag) {
                     bool reshuffle = true;
                     if (!game.won()) {
                         sf::Text text(font, "Press Enter to confirm reshuffle", FONT_SIZE);
                         text.setPosition({(WINDOW_WIDTH - text.getGlobalBounds().size.x) / 2, 0});
-                        window.draw(text);
                         while (true) {
+                            window.clear(COLOR_BG);
+                            window.draw(game);
+                            window.draw(text);
                             window.display();
                             std::optional event = window.pollEvent();
                             if (!event) continue;
@@ -724,6 +763,9 @@ int main() {
                         was_dragged = reversed = false;
                     }
                 }
+                //else if (key->code == W) {
+                //    game.stats.registerWin();
+                //}
             }
         }
 
@@ -736,4 +778,9 @@ int main() {
         }
         window.display();
     }
+    if (!game.won() && config.close_is_loss) {
+        overall_stats.recordLoss();
+    }
+    overall_stats.save(STATS_FILE, config);
+    return 0;
 }
