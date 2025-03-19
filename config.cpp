@@ -49,9 +49,11 @@ bool onlyWhitespace(std::string_view str, const char *ws=whitespace) {
 void Config::parse(const char *filename) {
     std::ifstream file(filename);
     std::string line_str;
+    bool create = true;
     while (std::getline(file, line_str)) {
         std::string_view line(line_str);
         if (onlyWhitespace(line)) continue;
+        create = false;
         size_t x = line.find_first_of('=');
         if (x == (size_t)-1) {
             throw std::runtime_error("missing '='");
@@ -73,6 +75,14 @@ void Config::parse(const char *filename) {
         } else {
             throw std::runtime_error("invalid setting");
         }
+    }
+    if (create) {
+        std::ofstream out(filename);
+        out << ENABLE_UNDO " = true\n"
+               NUM_CONS_UNDOS_ALLOW " = 1\n"
+               CONSIDER_UNDO_WINS " = false\n"
+               CLOSE_IS_LOSS " = false\n"
+               REAL_MOVES " = true\n";
     }
 }
 

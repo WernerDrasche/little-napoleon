@@ -763,6 +763,9 @@ int main() {
                         game = Game();
                         drag = hover = sel = {};
                         was_dragged = reversed = false;
+                        for (Card &card : cards) {
+                            card.selected = card.hovered = false;
+                        }
                     }
                 }
                 //else if (key->code == W) {
